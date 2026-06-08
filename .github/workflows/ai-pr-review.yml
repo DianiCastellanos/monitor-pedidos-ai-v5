@@ -10,16 +10,11 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      models: read
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Obtener diff del PR
-        run: |
-          git fetch origin ${{ github.base_ref }}
-          git diff origin/${{ github.base_ref }}...HEAD | head -c 8000 > /tmp/pr_diff.txt
-          echo "Diff generado: $(wc -c < /tmp/pr_diff.txt) bytes"
 
       - name: AI Review via GitHub Models
         env:
@@ -27,36 +22,11 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
-          DIFF=$(cat /tmp/pr_diff.txt)
-          if [ -z "$DIFF" ]; then
-            echo "Sin cambios de codigo para revisar."
-            exit 0
-          fi
-
-          PAYLOAD=$(python3 -c "
-import json, sys
-diff = open('/tmp/pr_diff.txt').read()
-system = 'Eres un revisor de codigo para MonitorPedidos AI (Blazor Server .NET 8 + SignalR + EF Core). Revisa el diff y reporta hallazgos concretos. Areas sensibles: autenticacion cookie, antiforgery, AppDbContext (usar IServiceScopeFactory para escritura), ProductionDb READ-ONLY (nunca DELETE/UPDATE/INSERT/ALTER). Se conciso, usa bullet points, max 300 palabras. Rol advisory.'
-print(json.dumps({'model':'gpt-4o-mini','messages':[{'role':'system','content':system},{'role':'user','content':diff}],'max_tokens':600}))
-          ")
-
-          RESPONSE=$(curl -sf https://models.inference.ai.azure.com/chat/completions \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD")
-
-          if [ $? -ne 0 ] || [ -z "$RESPONSE" ]; then
-            echo "Error al llamar GitHub Models API."
-            exit 1
-          fi
-
-          COMMENT=$(python3 -c "
-import json, sys
-d = json.loads(sys.argv[1])
-if 'choices' in d:
-    print(d['choices'][0]['message']['content'])
-else:
-    print('No se pudo generar el review. Detalle: ' + json.dumps(d))
-          " "$RESPONSE")
-
-          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$(printf '## Robot AI PR Review (Advisory)\n\n%s\n\n---\n*Revision automatica con GitHub Models (gpt-4o-mini). La aprobacion humana es el gate de merge.*' "$COMMENT")"
+          git fetch origin ${{ github.base_ref }}
+          DIFF=$(git diff origin/${{ github.base_ref }}...HEAD | head -c 6000)
+          if [ -z "$DIFF" ]; then echo "Sin cambios de codigo."; exit 0; fi
+          SYSTEM="Revisor de MonitorPedidos AI (Blazor Server .NET 8 + EF Core). Revisa el diff. Areas sensibles: ProductionDb READ-ONLY (nunca DELETE/UPDATE/INSERT), AppDbContext usar IServiceScopeFactory para escritura, antiforgery. Bullet points, max 200 palabras. Rol advisory."
+          PAYLOAD=$(jq -n --arg s "$SYSTEM" --arg d "$DIFF" '{"model":"gpt-4o-mini","messages":[{"role":"system","content":$s},{"role":"user","content":$d}],"max_tokens":400}')
+          RESPONSE=$(curl -sf "https://models.inference.ai.azure.com/chat/completions" -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" -d "$PAYLOAD")
+          COMMENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "No se pudo generar el review. Respuesta: " + tostring')
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$(printf '## Robot AI PR Review (Advisory)\n\n%s\n\n---\n*Revision automatica con GitHub Models (gpt-4o-mini). Aprobacion humana requerida.*' "$COMMENT")"
