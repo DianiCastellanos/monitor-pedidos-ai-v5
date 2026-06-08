@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using MonitorPedidos.Domain.Monitoring;
 using MonitorPedidos.Domain.Rules;
@@ -5,23 +6,30 @@ using MonitorPedidos.Domain.Shared;
 using MonitorPedidos.Web.Features.ApiChecks;
 using MonitorPedidos.Web.Features.Monitoring;
 using MonitorPedidos.Web.Services;
+using MonitorPedidos.Web.Telemetry;
 
 namespace MonitorPedidos.Web.BackgroundServices;
 
 public sealed class MonitoringSchedulerService : BackgroundService
 {
+    private static readonly ActivitySource _activity =
+        new("MonitorPedidos.Scheduler");
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IConfiguration _config;
     private readonly ILogger<MonitoringSchedulerService> _logger;
+    private readonly MonitorMetrics _metrics;
 
     public MonitoringSchedulerService(
         IServiceScopeFactory scopeFactory,
         IConfiguration config,
-        ILogger<MonitoringSchedulerService> logger)
+        ILogger<MonitoringSchedulerService> logger,
+        MonitorMetrics metrics)
     {
         _scopeFactory = scopeFactory;
         _config       = config;
         _logger       = logger;
+        _metrics      = metrics;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -120,17 +128,33 @@ public sealed class MonitoringSchedulerService : BackgroundService
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
             cts.CancelAfter(timeoutMs);
+
+            using var span = _activity.StartActivity(
+                $"checker.{checker.Module.ToString()}",
+                ActivityKind.Internal);
+            span?.SetTag("checker.module", checker.Module.ToString());
+
+            var sw = Stopwatch.StartNew();
             try
             {
                 await svc.RunCheckAsync(checker, cts.Token);
+                sw.Stop();
+                span?.SetStatus(ActivityStatusCode.Ok);
+                _metrics.RecordCheck(checker.Module.ToString(), "Executed", sw.Elapsed.TotalMilliseconds);
             }
             catch (OperationCanceledException) when (!stoppingToken.IsCancellationRequested)
             {
+                sw.Stop();
+                span?.SetStatus(ActivityStatusCode.Error, "Timeout");
+                _metrics.RecordCheck(checker.Module.ToString(), "Timeout", sw.Elapsed.TotalMilliseconds);
                 _logger.LogWarning("Checker {Type} timed out after {Ms} ms",
                     checker.GetType().Name, timeoutMs);
             }
             catch (Exception ex)
             {
+                sw.Stop();
+                span?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                _metrics.RecordCheck(checker.Module.ToString(), "Error", sw.Elapsed.TotalMilliseconds);
                 _logger.LogError(ex, "Unexpected failure in checker {Type}",
                     checker.GetType().Name);
             }

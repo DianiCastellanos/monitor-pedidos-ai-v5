@@ -3,6 +3,10 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using OpenTelemetry.Metrics;
+using MonitorPedidos.Web.Telemetry;
 using MonitorPedidos.Domain.Incidents;
 using MonitorPedidos.Domain.Monitoring;
 using MonitorPedidos.Domain.Notifications;
@@ -64,6 +68,29 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     else
         options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"));
 });
+// OpenTelemetry — Traces + Metrics (logging via Serilog existente)
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(r => r
+        .AddService("MonitorPedidos", serviceVersion: "1.0.0")
+        .AddAttributes(new Dictionary<string, object>
+        {
+            ["deployment.environment"] = builder.Environment.EnvironmentName
+        }))
+    .WithTracing(t => t
+        .AddAspNetCoreInstrumentation(o => o.RecordException = true)
+        .AddHttpClientInstrumentation()
+        .AddEntityFrameworkCoreInstrumentation()
+        .AddSqlClientInstrumentation()
+        .AddSource("MonitorPedidos.*")
+        .AddConsoleExporter())
+    .WithMetrics(m => m
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddRuntimeInstrumentation()
+        .AddMeter("MonitorPedidos.Checkers")
+        .AddConsoleExporter());
+builder.Services.AddSingleton<MonitorMetrics>();
+
 // Data Protection — persiste claves entre reinicios
 builder.Services.AddDataProtection()
     .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(builder.Environment.ContentRootPath, "keys")))
