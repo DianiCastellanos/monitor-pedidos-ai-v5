@@ -1,0 +1,63 @@
+name: AI PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  ai-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR diff
+        run: |
+          git diff origin/${{ github.base_ref }}...HEAD > /tmp/pr.diff
+          head -c 8000 /tmp/pr.diff > /tmp/pr_trimmed.diff
+
+      - name: AI Review via GitHub Models
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          DIFF=$(cat /tmp/pr_trimmed.diff)
+
+          DIFF_ESCAPED=$(echo "$DIFF" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+
+          PROMPT="Eres un revisor de código para MonitorPedidos AI (Blazor Server .NET 8 + SignalR + EF Core). Revisa este diff y reporta hallazgos concretos. Áreas sensibles: autenticación cookie, antiforgery, AppDbContext (usar IServiceScopeFactory para escritura), ProductionDb READ-ONLY (nunca DELETE/UPDATE/INSERT/ALTER). Sé conciso, usa bullet points, máximo 300 palabras. Rol advisory."
+
+          PROMPT_ESCAPED=$(echo "$PROMPT" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+
+          RESPONSE=$(curl -s https://models.inference.ai.azure.com/chat/completions \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"model\": \"gpt-4o-mini\",
+              \"messages\": [
+                {\"role\": \"system\", \"content\": $PROMPT_ESCAPED},
+                {\"role\": \"user\", \"content\": $DIFF_ESCAPED}
+              ],
+              \"max_tokens\": 500
+            }")
+
+          COMMENT=$(echo "$RESPONSE" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+if 'choices' in data:
+    print(data['choices'][0]['message']['content'])
+else:
+    print('No se pudo generar el review. Respuesta: ' + json.dumps(data))
+")
+
+          gh pr comment $PR_NUMBER --repo $REPO --body "## 🤖 AI PR Review (Advisory)
+
+$COMMENT
+
+---
+*Revisión automática con GitHub Models (gpt-4o-mini) — la aprobación humana es el gate de merge.*"
