@@ -30,6 +30,12 @@ public sealed class SimulatedJobStatusRepository(AppDbContext context) : IJobSta
                 .SetProperty(j => j.ErrorMessage,  status.ErrorMessage), ct);
     }
 
+    public async Task CreateAsync(SimulatedJobStatus status, CancellationToken ct = default)
+    {
+        context.SimulatedJobStatuses.Add(status);
+        await context.SaveChangesAsync(ct);
+    }
+
     // Status="Completed" → job saludable (IsRunning=true, LastSucceeded=true)
     // Status="Failed"/"NotRun" → job fallido (IsRunning=false, LastSucceeded=false)
     private static JobStatusSnapshot ToSnapshot(SimulatedJobStatus j) =>

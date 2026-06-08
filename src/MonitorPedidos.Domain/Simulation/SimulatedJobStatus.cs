@@ -10,6 +10,9 @@ public sealed class SimulatedJobStatus
 
     private SimulatedJobStatus() { }
 
+    public static SimulatedJobStatus Create(string jobName) =>
+        new() { JobName = jobName, LastRunAt = DateTime.UtcNow, Status = "NotRun" };
+
     public SimulatedJobStatus MarkFailed(string errorMessage) =>
         new() { Id = Id, JobName = JobName, LastRunAt = DateTime.UtcNow, Status = "Failed", ErrorMessage = errorMessage };
 

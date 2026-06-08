@@ -28,6 +28,7 @@ using MonitorPedidos.Infrastructure.Dashboard;
 using MonitorPedidos.Web.Hubs;
 using MonitorPedidos.Domain.Simulation;
 using MonitorPedidos.Infrastructure.Simulation;
+using MonitorPedidos.Web.Telemetry;
 
 // Busca .env desde el directorio actual hacia arriba (raíz del repo)
 static string? FindEnvFile()
@@ -274,6 +275,46 @@ app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 app.MapHub<AlertsHub>("/hubs/alerts");
 
+// M11 Jobs — endpoint push: SR-SDEV02CO reporta estado cada 5 min (schtasks no disponible en Render/Linux)
+app.MapPost("/api/jobs/report", async (
+    HttpContext httpCtx,
+    IServiceScopeFactory scopeFactory,
+    IConfiguration config,
+    JobReportRequest req) =>
+{
+    var expectedKey = config["JobsReport:ApiKey"];
+    if (string.IsNullOrEmpty(expectedKey))
+        return Results.StatusCode(503); // desactivado si no hay clave configurada
+
+    if (!httpCtx.Request.Headers.TryGetValue("X-Jobs-Report-Key", out var h) || h.ToString() != expectedKey)
+        return Results.Unauthorized();
+
+    if (string.IsNullOrWhiteSpace(req.JobName))
+        return Results.BadRequest("jobName requerido");
+
+    var isHealthy = req.Status is "Ready" or "Running" or "Completed";
+
+    using var scope = scopeFactory.CreateScope();
+    var repo = scope.ServiceProvider.GetRequiredService<ISimulatedJobStatusRepository>();
+    var job  = await repo.GetByJobNameAsync(req.JobName);
+
+    if (job is null)
+    {
+        var seed    = SimulatedJobStatus.Create(req.JobName);
+        var created = isHealthy ? seed.MarkCompleted()
+                                : seed.MarkFailed(req.ErrorMessage ?? $"Job en estado: {req.Status}");
+        await repo.CreateAsync(created);
+    }
+    else
+    {
+        var updated = isHealthy ? job.MarkCompleted()
+                                : job.MarkFailed(req.ErrorMessage ?? $"Job en estado: {req.Status}");
+        await repo.UpdateAsync(updated);
+    }
+
+    return Results.Ok(new { updated = true, jobName = req.JobName, status = req.Status });
+}).AllowAnonymous();
+
 // Migraciones automáticas — solo SQL Server (Supabase ya tiene el esquema aplicado via MCP)
 using (var scope = app.Services.CreateScope())
 {
@@ -286,3 +327,6 @@ app.Run();
 
 // Requerido para WebApplicationFactory en tests de integración
 public partial class Program { }
+
+// DTO para POST /api/jobs/report
+record JobReportRequest(string JobName, string Status, string? ErrorMessage = null);
