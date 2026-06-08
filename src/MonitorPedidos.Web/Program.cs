@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using MonitorPedidos.Domain.Incidents;
 using MonitorPedidos.Domain.Monitoring;
@@ -63,8 +64,6 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     else
         options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"));
 });
-builder.Services.AddSingleton(_ => dbProvider); // expone el provider activo para logging
-
 // Data Protection — persiste claves entre reinicios
 builder.Services.AddDataProtection()
     .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(builder.Environment.ContentRootPath, "keys")))
@@ -79,8 +78,8 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         options.ExpireTimeSpan    = TimeSpan.FromHours(8);
         options.SlidingExpiration = true;
         options.Cookie.HttpOnly   = true;
-        options.Cookie.SameSite   = SameSiteMode.Strict;
-        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        options.Cookie.SameSite     = builder.Environment.IsDevelopment() ? SameSiteMode.Lax : SameSiteMode.Strict;
+        options.Cookie.SecurePolicy = builder.Environment.IsDevelopment() ? CookieSecurePolicy.None : CookieSecurePolicy.SameAsRequest;
     });
 
 // Authorization — deny-by-default (RF-26, BR-AUTHZ-01)
@@ -101,7 +100,7 @@ builder.Services.AddRazorComponents()
 // ── U6: SignalR + Real-Time ───────────────────────────────────────────────
 builder.Services.AddSignalR(opts =>
 {
-    if (builder.Environment.IsDevelopment()) opts.EnableDetailedErrors = true;
+    opts.EnableDetailedErrors = true;
 });
 builder.Services.AddSingleton<AlertBroadcaster>();
 builder.Services.AddSingleton<INotificationService, NotificationService>();
@@ -133,15 +132,29 @@ builder.Services.AddHostedService<MonitoringSchedulerService>();
 builder.Services.Configure<SimulationOptions>(
     builder.Configuration.GetSection(SimulationOptions.Section));
 
-// M2 — IOrderSource: en SQL Server lee oc_encabezado (producción); en Supabase
-// lee simulated_orders desde la misma BD (oc_encabezado no existe en Supabase).
-var prodConn   = builder.Configuration.GetConnectionString("ProductionDb");
-var useProdSql = dbProvider.Equals("sqlserver", StringComparison.OrdinalIgnoreCase)
-                 && !string.IsNullOrEmpty(prodConn);
-if (useProdSql)
-    builder.Services.AddScoped<IOrderSource>(_ => new ProductionOrderRepository(prodConn!));
+// M2 — IOrderSource: la fuente de pedidos depende exclusivamente de DB_PROVIDER.
+//   supabase  → SupabaseOrderRepository (lee oc_encabezado en Supabase). NUNCA consulta SQL Server.
+//   sqlserver → ProductionOrderRepository (oc_encabezado en SQL Server) si hay ProductionDb;
+//               si no, SimulatedOrderRepository como fallback (comportamiento previo intacto).
+// La tabla de simulación U7 (simulated_orders) queda exclusiva para simulación, no para M2.
+if (dbProvider.Equals("supabase", StringComparison.OrdinalIgnoreCase))
+{
+    var supabaseConn = builder.Configuration.GetConnectionString("SupabaseConnection");
+    builder.Services.AddScoped<IOrderSource>(_ => new SupabaseOrderRepository(supabaseConn!));
+}
 else
-    builder.Services.AddScoped<IOrderSource, SimulatedOrderRepository>();
+{
+    var prodConn = builder.Configuration.GetConnectionString("ProductionDb");
+    if (!string.IsNullOrWhiteSpace(prodConn))
+        builder.Services.AddScoped<IOrderSource>(_ => new ProductionOrderRepository(prodConn!));
+    else
+        builder.Services.AddScoped<IOrderSource, SimulatedOrderRepository>();
+}
+
+// Seeder de carga inicial única para oc_encabezado (se auto-desactiva fuera de modo supabase)
+builder.Services.AddHostedService<OrderSeederService>();
+// Simulación opcional M2: inserta pedidos recientes periódicamente (solo si OrderFeeder:Enabled=true)
+builder.Services.AddHostedService<OrderFeederService>();
 
 builder.Services.AddScoped<ISimulatedOrderRepository,     SimulatedOrderRepository>();
 // JobsMonitor — real desde Task Scheduler, con fallback a simulación
@@ -208,6 +221,16 @@ builder.Services.AddProblemDetails();
 var app = builder.Build();
 
 // Pipeline de seguridad (orden crítico — nfr-design-patterns.md §1)
+// ForwardedHeaders: Render termina TLS en proxy y reenvía HTTP al container.
+// KnownNetworks/KnownProxies vacíos = acepta cualquier proxy (requerido en Render/cloud).
+var forwardedOptions = new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+};
+forwardedOptions.KnownNetworks.Clear();
+forwardedOptions.KnownProxies.Clear();
+app.UseForwardedHeaders(forwardedOptions);
+
 if (!app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 

@@ -27,7 +27,8 @@ public sealed class IncidentMaintenanceService : BackgroundService
         {
             await RunIncidentPurgeAsync(stoppingToken);
             await RunSnapshotPurgeAsync(stoppingToken);
-            await Task.Delay(Interval, stoppingToken);
+            try { await Task.Delay(Interval, stoppingToken); }
+            catch (OperationCanceledException) { break; }
         }
     }
 
@@ -43,7 +44,11 @@ public sealed class IncidentMaintenanceService : BackgroundService
                 "Incident purge completed. RetentionDays={Days} Deleted={Count}",
                 retentionDays, deleted);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Graceful shutdown — no loggear como error
+        }
+        catch (Exception ex)
         {
             _logger.LogError(ex,
                 "Incident purge failed. RetentionDays={Days}", retentionDays);
@@ -64,7 +69,11 @@ public sealed class IncidentMaintenanceService : BackgroundService
                 "Brand snapshot purge completed. RetentionHours={Hours} Cutoff={Cutoff:u}",
                 retentionHours, cutoff);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Graceful shutdown — no loggear como error
+        }
+        catch (Exception ex)
         {
             _logger.LogError(ex,
                 "Brand snapshot purge failed. RetentionHours={Hours}", retentionHours);

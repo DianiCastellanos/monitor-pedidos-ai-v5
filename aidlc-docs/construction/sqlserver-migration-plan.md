@@ -28,7 +28,7 @@ flowchart LR
 
 #### `.env` (gitignored — contiene credenciales reales)
 ```
-ConnectionStrings__DefaultConnection=Server=172.16.0.41;Database=MonitorPedidosDb;User Id=Vtainternet;Password=Vta123;TrustServerCertificate=True;Encrypt=True
+ConnectionStrings__DefaultConnection=Server=172.16.0.41;Database=MonitorPedidosDb;User Id=<DB_USER>;Password=<DB_PASSWORD>;TrustServerCertificate=True;Encrypt=True
 ConnectionStrings__ProductionDb=Server=<IP_SERVIDOR_BD>;Database=<NOMBRE_BD_PRODUCCION>;User Id=<DB_USER>;Password=<DB_PASSWORD>;TrustServerCertificate=True;Encrypt=True
 ```
 

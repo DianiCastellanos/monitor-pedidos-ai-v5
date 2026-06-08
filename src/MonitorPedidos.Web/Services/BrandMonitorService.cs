@@ -19,9 +19,12 @@ public sealed class BrandMonitorService(
     public async Task SimulateAndRefreshAsync(CancellationToken ct = default)
     {
         logger.LogInformation("[BrandMonitor] SimulateAndRefreshAsync — forzando refresh desde Salesforce");
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var checker           = scope.ServiceProvider.GetRequiredService<BrandMonitorChecker>();
-        await checker.ExecuteAsync(ct);
+        await using var scope  = scopeFactory.CreateAsyncScope();
+        var checker            = scope.ServiceProvider.GetRequiredService<BrandMonitorChecker>();
+        // Pasar por IMonitoringService para que LastCheckStore se actualice correctamente.
+        // Sin esto el countdown del Dashboard no se resetea al presionar "Consultar Salesforce".
+        var monitorService     = scope.ServiceProvider.GetRequiredService<IMonitoringService>();
+        await monitorService.RunCheckAsync(checker, ct);
         logger.LogInformation("[BrandMonitor] Refresh completado");
     }
 

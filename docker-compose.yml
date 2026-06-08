@@ -2,7 +2,7 @@ services:
 
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
-    container_name: ecommonitor-db
+    container_name: monitor-pedidos-db
     restart: unless-stopped
     environment:
       SA_PASSWORD: "${DB_PASSWORD}"
@@ -21,8 +21,8 @@ services:
 
   app:
     build: .
-    image: ecommonitor-app:latest
-    container_name: ecommonitor-app
+    image: monitor-pedidos-ecommerce:latest
+    container_name: monitor-pedidos-app
     restart: unless-stopped
     ports:
       - "8080:8080"
@@ -35,8 +35,8 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       DB_HOST: sqlserver
       DB_USER: sa
-      ConnectionStrings__DefaultConnection: "Server=tcp:sqlserver,1433;Database=EcomMonitorDb;User Id=sa;Password=${DB_PASSWORD};TrustServerCertificate=True;Encrypt=True;"
-      ConnectionStrings__ProductionDb: "Server=tcp:sqlserver,1433;Database=EcomMonitorDb;User Id=sa;Password=${DB_PASSWORD};TrustServerCertificate=True;Encrypt=True;"
+      ConnectionStrings__DefaultConnection: "Server=tcp:sqlserver,1433;Database=MonitorPedidosDb;User Id=sa;Password=${DB_PASSWORD};TrustServerCertificate=True;Encrypt=True;"
+      ConnectionStrings__ProductionDb: "Server=tcp:sqlserver,1433;Database=MonitorPedidosDb;User Id=sa;Password=${DB_PASSWORD};TrustServerCertificate=True;Encrypt=True;"
 
 volumes:
   sqldata:

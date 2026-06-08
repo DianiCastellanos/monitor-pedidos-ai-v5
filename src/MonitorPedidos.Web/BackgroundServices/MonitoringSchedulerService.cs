@@ -34,6 +34,10 @@ public sealed class MonitoringSchedulerService : BackgroundService
             "MonitoringSchedulerService started — monitor: {M} min, api: {A} min, brand: {B} min | rid=",
             monitorMin, apiMin, brandMin);
 
+        // Warmup: espera 5s para que el pool de conexiones (Supabase/SQL Server) se inicialice
+        try { await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); }
+        catch (OperationCanceledException) { return; }
+
         using var monitorTimer = new PeriodicTimer(TimeSpan.FromMinutes(monitorMin));
         using var apiTimer     = new PeriodicTimer(TimeSpan.FromMinutes(apiMin));
 

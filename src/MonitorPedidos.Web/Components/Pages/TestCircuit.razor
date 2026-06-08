@@ -1,0 +1,39 @@
+@page "/test-circuit"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+
+@attribute [AllowAnonymous]
+
+<PageTitle>Test Circuit</PageTitle>
+
+<h3>Test Circuito Blazor</h3>
+
+<p>Contador: <strong>@_count</strong></p>
+<p>Timestamp: <strong>@_timestamp</strong></p>
+
+<button class="btn btn-primary" @onclick="Increment">+1</button>
+<button class="btn btn-secondary ms-2" @onclick="Reset">Reset</button>
+
+@if (_count > 0)
+{
+    <div class="alert alert-success mt-3">
+        Circuito activo — botones responden y estado actualiza correctamente.
+    </div>
+}
+
+@code {
+    private int _count = 0;
+    private string _timestamp = "—";
+
+    private void Increment()
+    {
+        _count++;
+        _timestamp = DateTimeOffset.Now.ToString("HH:mm:ss");
+    }
+
+    private void Reset()
+    {
+        _count = 0;
+        _timestamp = "—";
+    }
+}

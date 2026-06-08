@@ -22,16 +22,13 @@ public sealed class OrderSyncService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // Solo aplica en SQL Server: sincroniza entre dos BDs SQL Server (vtainternet_qa → MonitorPedidosDb).
-        // En Supabase no hay oc_encabezado, así que el sync se desactiva.
-        var dbProvider = Environment.GetEnvironmentVariable("DB_PROVIDER") ?? "sqlserver";
-        if (dbProvider.Equals("supabase", StringComparison.OrdinalIgnoreCase))
-        {
-            _logger.LogInformation("OrderSyncService desactivado — DB_PROVIDER=supabase (sin oc_encabezado SQL Server)");
-            return;
-        }
-
+        // El sync se activa solo cuando ambas conexiones son SQL Server.
+        // No depende de DB_PROVIDER: permite modo híbrido (supabase + sqlserver).
         _logger.LogInformation("OrderSyncService iniciado — sincroniza oc_encabezado cada {Min} min", Interval.TotalMinutes);
+
+        // Warmup: espera 5s antes del primer sync para que el pool de conexiones esté listo
+        try { await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); }
+        catch (OperationCanceledException) { return; }
 
         // Primera sincronización al arrancar
         await RunSyncAsync(stoppingToken);
@@ -52,9 +49,16 @@ public sealed class OrderSyncService : BackgroundService
         var sourceCs = _config.GetConnectionString("SyncSourceDb");
         var targetCs = _config.GetConnectionString("DefaultConnection");
 
-        if (string.IsNullOrWhiteSpace(sourceCs) || string.IsNullOrWhiteSpace(targetCs))
+        // Requiere ambas conexiones SQL Server configuradas.
+        // Si alguna está vacía o apunta a PostgreSQL/Supabase, se desactiva.
+        static bool IsSqlServer(string? cs) =>
+            !string.IsNullOrWhiteSpace(cs) &&
+            !cs.Contains("Host=",        StringComparison.OrdinalIgnoreCase) &&
+            !cs.Contains("supabase.com", StringComparison.OrdinalIgnoreCase);
+
+        if (!IsSqlServer(sourceCs) || !IsSqlServer(targetCs))
         {
-            _logger.LogWarning("[OrderSync] SyncSourceDb no configurado — sincronización desactivada");
+            _logger.LogInformation("[OrderSync] Desactivado — SyncSourceDb o DefaultConnection no son SQL Server");
             return;
         }
 
@@ -121,6 +125,11 @@ public sealed class OrderSyncService : BackgroundService
             _logger.LogInformation(
                 "[OrderSync] ✓ {Count} registros sincronizados vtainternet_qa → MonitorPedidosDb (ventana={D} días)",
                 affected, windowDays);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // TCP connection timeout en frío — no propagar, el próximo ciclo reintentará
+            _logger.LogWarning("[OrderSync] Timeout de conexión en arranque frío — reintentará en {Min} min", Interval.TotalMinutes);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

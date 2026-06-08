@@ -136,14 +136,14 @@ services:
     container_name: monitorpedidos-sqlserver
     environment:
       - ACCEPT_EULA=Y
-      - MSSQL_SA_PASSWORD=Monitor@2024!Strong
+      - MSSQL_SA_PASSWORD=<SA_PASSWORD>
     ports:
       - "1434:1433"           # 1434 externo para no pisar SQL Server local
     volumes:
       - sql-data:/var/opt/mssql
     healthcheck:
       test: ["CMD", "/opt/mssql-tools/bin/sqlcmd", "-S", "localhost",
-             "-U", "sa", "-P", "Monitor@2024!Strong", "-Q", "SELECT 1"]
+             "-U", "sa", "-P", "<SA_PASSWORD>", "-Q", "SELECT 1"]
       interval: 10s
       timeout: 5s
       retries: 10

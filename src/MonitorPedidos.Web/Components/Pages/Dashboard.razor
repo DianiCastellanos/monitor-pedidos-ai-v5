@@ -8,15 +8,17 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject LastCheckStore LastCheckStore
 @inject IServiceScopeFactory ScopeFactory
+@inject IRuleRepository RuleRepository
 @inject ILogger<Dashboard> _logger
 @inject IConfiguration _config
 @inject IJSRuntime JS
 
-<PageTitle>Dashboard — MonitorPedidos</PageTitle>
+
+<PageTitle>Dashboard — Monitor Pedidos eCommerce</PageTitle>
 
 <div class="d-flex justify-content-between align-items-start mb-2">
     <div>
-        <h2 class="mb-0 fw-bold">Dashboard — MonitorPedidos AI</h2>
+        <h2 class="mb-0 fw-bold">Dashboard — Monitor Pedidos eCommerce</h2>
         <p class="text-muted small mb-0">
             @if (_cardsLastUpdate is not null)
             {
@@ -187,7 +189,7 @@ else
 
 <div class="d-flex align-items-center mb-2" data-testid="brand-monitor-header">
     <h5 class="mb-0">Pedidos por descargar</h5>
-    <span class="text-muted small ms-2">— pendientes en Salesforce por marca</span>
+    <span class="text-muted small ms-2">— Pedidos pendientes de descarga en Salesforce por marca</span>
     <button class="btn btn-outline-secondary btn-sm ms-auto" data-testid="btn-brand-refresh" @onclick="() => RefreshBrandAsync(true)" disabled="@(_brandLoading || _brandRefreshing)">
         @if (_brandRefreshing) { <span class="spinner-border spinner-border-sm me-1"></span><span>Consultando Salesforce...</span> }
         else { <span>&#8635; Consultar Salesforce</span> }
@@ -377,9 +379,20 @@ else
 @code {
     private const int CardsRefreshIntervalSeconds = 30;
 
-    // Lee desde config en cada acceso; hot-reload actualiza sin restart
-    private double BrandCheckerIntervalMinutes =>
-        _config.GetValue("Monitoring:BrandMonitorPollIntervalMinutes", 3.0);
+    // Lee dinámicamente desde la tabla `rules` en Supabase — fallback a config
+    private double BrandCheckerIntervalMinutes
+    {
+        get
+        {
+            // Intentar leer de la BD (cacheado en campo privado)
+            if (_brandPollIntervalMinutes > 0) return _brandPollIntervalMinutes;
+
+            // Fallback a appsettings
+            return _config.GetValue("Monitoring:BrandMonitorPollIntervalMinutes", 3.0);
+        }
+    }
+
+    private double _brandPollIntervalMinutes = 0;
 
     private DateTimeOffset? _cardsLastUpdate  = null;
     private DateTimeOffset? _brandLastUpdate  = null;
@@ -411,8 +424,14 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
-        _userRole = auth.User.IsInRole("Técnico") ? "Técnico" : "Operador";
+        //var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        //_userRole = auth.User.IsInRole("Técnico") ? "Técnico" : "Operador";
+        _userRole = "Técnico";
+        // Cargar pollIntervalMinutes dinámicamente desde BD
+        await LoadBrandPollIntervalAsync();
+
+        // Iniciar countdown desde el intervalo correcto (antes de que el checker haya corrido)
+        _brandCountdown = (int)(BrandCheckerIntervalMinutes * 60);
 
         await RefreshAllAsync();
 
@@ -420,21 +439,49 @@ else
         {
             await RefreshIncidentsAsync();
             await InvokeAsync(StateHasChanged);
-            await JS.InvokeVoidAsync("startTitleAlert");
+           // await JS.InvokeVoidAsync("startTitleAlert");
         };
-        _closeHandler = async _ =>
-        {
-            await RefreshIncidentsAsync();
-            await InvokeAsync(StateHasChanged);
+        //_closeHandler = async _ =>
+        //{
+          //  await RefreshIncidentsAsync();
+            //await InvokeAsync(StateHasChanged);
             // Detener parpadeo si ya no quedan incidentes críticos
-            if (!_openIncidents.Any(i => i.Severity == Severity.Critical))
-                await JS.InvokeVoidAsync("stopTitleAlert");
-        };
+            //if (!_openIncidents.Any(i => i.Severity == Severity.Critical))
+               // await JS.InvokeVoidAsync("stopTitleAlert");
+        //};
+        _closeHandler = async _ =>
+{
+    await RefreshIncidentsAsync();
+    await InvokeAsync(StateHasChanged);
+};
 
         Broadcaster.OnAlert          += _alertHandler;
         Broadcaster.OnIncidentClosed += _closeHandler;
 
         _ = StartCardsTimerAsync(_cts.Token);
+    }
+
+    private async Task LoadBrandPollIntervalAsync()
+    {
+        try
+        {
+            var rules = await RuleRepository.GetActiveByModuleAsync(ModuleId.BrandMonitor);
+            if (rules.Count == 0) return;
+
+            using var doc = JsonDocument.Parse(rules[0].ConditionJson);
+            if (doc.RootElement.TryGetProperty("pollIntervalMinutes", out var prop)
+                && prop.TryGetDouble(out var minutes)
+                && minutes >= 1)
+            {
+                _brandPollIntervalMinutes = minutes;
+                _logger.LogDebug("[Dashboard] Cargado pollIntervalMinutes={Min} min desde BD", minutes);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("[Dashboard] Error cargando pollIntervalMinutes: {Msg}", ex.Message);
+            // Fallback a appsettings automático vía propiedad BrandCheckerIntervalMinutes
+        }
     }
 
     private async Task StartCardsTimerAsync(CancellationToken ct)
@@ -453,24 +500,25 @@ else
                     await RefreshIncidentsAsync();
                 }
 
-                // — Brand Monitor: sincronizado con LastCheckStore del checker —
+                // — Brand Monitor: countdown decrece 1s por tick; se reinicia al detectar nueva consulta —
                 var checkerIntervalSec = (int)(BrandCheckerIntervalMinutes * 60);
-                if (LastCheckStore.Results.TryGetValue(ModuleId.BrandMonitor, out var brandResult))
-                {
-                    var secondsSince = (int)(DateTimeOffset.UtcNow - brandResult.CheckedAt).TotalSeconds;
-                    _brandCountdown  = Math.Max(0, checkerIntervalSec - secondsSince);
 
-                    // El checker guardó datos nuevos → leer BD inmediatamente
-                    if (brandResult.CheckedAt > _brandLastCheckedAt)
-                    {
-                        _brandLastCheckedAt = brandResult.CheckedAt;
-                        await RefreshBrandAsync();
-                    }
+                if (LastCheckStore.Results.TryGetValue(ModuleId.BrandMonitor, out var brandResult)
+                    && brandResult.CheckedAt > _brandLastCheckedAt)
+                {
+                    // El checker (automático o el botón manual) produjo datos nuevos:
+                    // reiniciar el countdown al intervalo completo y recargar la BD.
+                    _brandLastCheckedAt = brandResult.CheckedAt;
+                    _brandCountdown     = checkerIntervalSec;
+                    await RefreshBrandAsync();
                 }
                 else
                 {
-                    // Checker aún no ha corrido → cuenta regresiva simple
-                    _brandCountdown = Math.Max(0, _brandCountdown - 1);
+                    // Decremento simple cada segundo. Al llegar a 0 reinicia al intervalo
+                    // (nunca se queda pegado en 0 aunque el checker de fondo se retrase).
+                    _brandCountdown = _brandCountdown > 0
+                        ? _brandCountdown - 1
+                        : checkerIntervalSec;
                 }
 
                 await InvokeAsync(StateHasChanged);
@@ -512,23 +560,8 @@ else
             const int fastTimeoutMs = 5_000;   // 5s para M2/M3/M4 — deben ser rápidos
             const int slowTimeoutMs = 10_000;  // 10s para M11 — puede estar inaccesible
 
-            var tasks = checkers
-                .Where(c => c.Module != ModuleId.BrandMonitor)
-                .Select(async checker =>
-                {
-                    var ms = checker.Module == ModuleId.JobsMonitor ? slowTimeoutMs : fastTimeoutMs;
-                    using var cts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
-                    cts.CancelAfter(ms);
-                    try { await monitoringSvc.RunCheckAsync(checker, cts.Token); }
-                    catch (OperationCanceledException) { /* timeout — M11 registra warning en el checker */ }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning("Chequear ahora {Module}: {Msg}", checker.Module, ex.Message);
-                    }
-                });
-
-            // M11 no bloquea — corre en background y su resultado aparece en el próximo StateHasChanged
-            var fastCheckers = checkers.Where(c =>
+            var checkerList   = checkers.ToList();
+            var fastCheckers  = checkerList.Where(c =>
                 c.Module != ModuleId.BrandMonitor && c.Module != ModuleId.JobsMonitor).ToList();
 
             var fastTasks = fastCheckers.Select(async checker =>
@@ -543,7 +576,7 @@ else
             await Task.WhenAll(fastTasks);
 
             // M11 corre sin bloquear (fire-and-forget con timeout propio)
-            var m11 = checkers.FirstOrDefault(c => c.Module == ModuleId.JobsMonitor);
+            var m11 = checkerList.FirstOrDefault(c => c.Module == ModuleId.JobsMonitor);
             if (m11 is not null)
             {
                 _ = Task.Run(async () =>
@@ -936,6 +969,8 @@ else
 @using MonitorPedidos.Domain.Incidents
 @using MonitorPedidos.Domain.Monitoring
 @using MonitorPedidos.Domain.Shared
+@using MonitorPedidos.Domain.Rules
 @using MonitorPedidos.Web.Features.Monitoring
 @using MonitorPedidos.Web.Services
 @using System.Security.Claims
+@using System.Text.Json

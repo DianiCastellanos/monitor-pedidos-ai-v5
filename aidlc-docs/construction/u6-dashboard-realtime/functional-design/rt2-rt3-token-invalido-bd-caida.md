@@ -62,8 +62,8 @@ ConnectionStrings__ProductionDb=Server=tcp:192.168.20.99,1433;...
 ### Config a cambiar temporalmente
 ```
 # ANTES (original)
-Salesforce__ClientId=31bbdc57-d861-4486-9550-04f7f3f24a1c
-Salesforce__ClientPassword=Pruebas-P@sh123
+Salesforce__ClientId=<SALESFORCE_CLIENT_ID>
+Salesforce__ClientPassword=<SALESFORCE_CLIENT_PASSWORD>
 
 # DURANTE TEST (credenciales inválidas)
 Salesforce__ClientId=INVALID_CLIENT_ID

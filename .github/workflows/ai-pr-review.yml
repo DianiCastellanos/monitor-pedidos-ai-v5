@@ -1,9 +1,7 @@
 name: AI PR Review
-
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-
 jobs:
   ai-review:
     runs-on: ubuntu-latest
@@ -15,7 +13,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: AI Review via GitHub Models
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -28,5 +25,5 @@ jobs:
           SYSTEM="Revisor de MonitorPedidos AI (Blazor Server .NET 8 + EF Core). Revisa el diff. Areas sensibles: ProductionDb READ-ONLY (nunca DELETE/UPDATE/INSERT), AppDbContext usar IServiceScopeFactory para escritura, antiforgery. Bullet points, max 200 palabras. Rol advisory."
           PAYLOAD=$(jq -n --arg s "$SYSTEM" --arg d "$DIFF" '{"model":"gpt-4o-mini","messages":[{"role":"system","content":$s},{"role":"user","content":$d}],"max_tokens":400}')
           RESPONSE=$(curl -sf "https://models.inference.ai.azure.com/chat/completions" -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" -d "$PAYLOAD")
-          COMMENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "No se pudo generar el review. Respuesta: " + tostring')
+          COMMENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "No se pudo generar el review."')
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$(printf '## Robot AI PR Review (Advisory)\n\n%s\n\n---\n*Revision automatica con GitHub Models (gpt-4o-mini). Aprobacion humana requerida.*' "$COMMENT")"
