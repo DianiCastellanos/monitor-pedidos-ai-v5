@@ -2,9 +2,9 @@
 
 ## Estado
 
-**Modalidad actual**: Code review manual — Diana Castellanos (owner)  
-**Próximo paso**: Activar AI PR Review automatizado con OpenHands PR Review  
-**Workflow activo**: `.github/workflows/ai-pr-review.yml` (GitHub Models, gpt-4o-mini)
+**Modalidad actual**: AI PR Review activo con GitHub Models  
+**Modelo**: gpt-4o-mini (gratuito en repos públicos)  
+**Workflow**: `.github/workflows/ai-pr-review.yml`
 
 ---
 
@@ -28,24 +28,22 @@ El review AI es **advisory** — la aprobación humana sigue siendo el gate de m
 
 ---
 
-## 3. Workflow activo
-
-Archivo: `.github/workflows/ai-pr-review.yml`
-
-- Trigger: `pull_request` (opened, synchronize, reopened)
-- Modelo: `gpt-4o-mini` vía GitHub Models (gratuito en repos públicos)
-- Auth: `GITHUB_TOKEN` automático — sin API key externa
-- Output: comentario advisory en el PR
-
----
-
-## 4. Cómo funciona
+## 3. Cómo funciona
 
 1. Se abre un PR → el workflow se activa automáticamente
 2. Obtiene el diff del PR (máx 8000 chars)
 3. Envía el diff a gpt-4o-mini con contexto de MonitorPedidos AI
 4. Posta un comentario con hallazgos en el PR
-5. El revisor humano (Diana) evalúa los hallazgos y aprueba o rechaza
+5. El revisor humano (Diana) evalúa los hallazgos y decide
+
+---
+
+## 4. Configuración
+
+- **Auth**: `GITHUB_TOKEN` automático — sin API key externa
+- **Endpoint**: `https://models.inference.ai.azure.com/chat/completions`
+- **Trigger**: `pull_request` (opened, synchronize, reopened)
+- **Costo**: gratuito en repos públicos
 
 ---
 
@@ -62,10 +60,4 @@ Archivo: `.github/workflows/ai-pr-review.yml`
 
 ---
 
-## 6. Rerun manual
-
-Cierra y reabre el PR, o pushea un commit nuevo a la rama.
-
----
-
-*Versión 1.1 — Estación 7 MonitorPedidos AI — 2026-06-08 — Workflow activo con GitHub Models*
+*Versión 1.2 — Estación 7 MonitorPedidos AI — 2026-06-08 — Workflow activo*
