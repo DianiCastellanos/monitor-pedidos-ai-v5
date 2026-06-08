@@ -15,10 +15,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get PR diff
+      - name: Obtener diff del PR
         run: |
-          git diff origin/${{ github.base_ref }}...HEAD > /tmp/pr.diff
-          head -c 8000 /tmp/pr.diff > /tmp/pr_trimmed.diff
+          git fetch origin ${{ github.base_ref }}
+          git diff origin/${{ github.base_ref }}...HEAD | head -c 8000 > /tmp/pr_diff.txt
+          echo "Diff generado: $(wc -c < /tmp/pr_diff.txt) bytes"
 
       - name: AI Review via GitHub Models
         env:
@@ -26,38 +27,36 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
-          DIFF=$(cat /tmp/pr_trimmed.diff)
+          DIFF=$(cat /tmp/pr_diff.txt)
+          if [ -z "$DIFF" ]; then
+            echo "Sin cambios de codigo para revisar."
+            exit 0
+          fi
 
-          DIFF_ESCAPED=$(echo "$DIFF" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+          PAYLOAD=$(python3 -c "
+import json, sys
+diff = open('/tmp/pr_diff.txt').read()
+system = 'Eres un revisor de codigo para MonitorPedidos AI (Blazor Server .NET 8 + SignalR + EF Core). Revisa el diff y reporta hallazgos concretos. Areas sensibles: autenticacion cookie, antiforgery, AppDbContext (usar IServiceScopeFactory para escritura), ProductionDb READ-ONLY (nunca DELETE/UPDATE/INSERT/ALTER). Se conciso, usa bullet points, max 300 palabras. Rol advisory.'
+print(json.dumps({'model':'gpt-4o-mini','messages':[{'role':'system','content':system},{'role':'user','content':diff}],'max_tokens':600}))
+          ")
 
-          PROMPT="Eres un revisor de código para MonitorPedidos AI (Blazor Server .NET 8 + SignalR + EF Core). Revisa este diff y reporta hallazgos concretos. Áreas sensibles: autenticación cookie, antiforgery, AppDbContext (usar IServiceScopeFactory para escritura), ProductionDb READ-ONLY (nunca DELETE/UPDATE/INSERT/ALTER). Sé conciso, usa bullet points, máximo 300 palabras. Rol advisory."
-
-          PROMPT_ESCAPED=$(echo "$PROMPT" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
-
-          RESPONSE=$(curl -s https://models.inference.ai.azure.com/chat/completions \
+          RESPONSE=$(curl -sf https://models.inference.ai.azure.com/chat/completions \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{
-              \"model\": \"gpt-4o-mini\",
-              \"messages\": [
-                {\"role\": \"system\", \"content\": $PROMPT_ESCAPED},
-                {\"role\": \"user\", \"content\": $DIFF_ESCAPED}
-              ],
-              \"max_tokens\": 500
-            }")
+            -d "$PAYLOAD")
 
-          COMMENT=$(echo "$RESPONSE" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-if 'choices' in data:
-    print(data['choices'][0]['message']['content'])
+          if [ $? -ne 0 ] || [ -z "$RESPONSE" ]; then
+            echo "Error al llamar GitHub Models API."
+            exit 1
+          fi
+
+          COMMENT=$(python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+if 'choices' in d:
+    print(d['choices'][0]['message']['content'])
 else:
-    print('No se pudo generar el review. Respuesta: ' + json.dumps(data))
-")
+    print('No se pudo generar el review. Detalle: ' + json.dumps(d))
+          " "$RESPONSE")
 
-          gh pr comment $PR_NUMBER --repo $REPO --body "## 🤖 AI PR Review (Advisory)
-
-$COMMENT
-
----
-*Revisión automática con GitHub Models (gpt-4o-mini) — la aprobación humana es el gate de merge.*"
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$(printf '## Robot AI PR Review (Advisory)\n\n%s\n\n---\n*Revision automatica con GitHub Models (gpt-4o-mini). La aprobacion humana es el gate de merge.*' "$COMMENT")"
